@@ -1,0 +1,21 @@
+const express=require("express"), cors=require("cors"), path=require("path"), jwt=require("jsonwebtoken"), bcrypt=require("bcryptjs"), Database=require("better-sqlite3");
+require("dotenv").config?.();
+const app=express(); const PORT=process.env.PORT||3000;
+const SECRET=process.env.JWT_SECRET||"CHANGE_ME"; const ADMIN_USER=process.env.ADMIN_USER||"admin";
+const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||"change-me-now";
+const db=new Database("./data/app.db");
+db.exec(`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT UNIQUE,password_hash TEXT);
+CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,mobile TEXT,service TEXT,address TEXT,date TEXT,status TEXT DEFAULT 'Pending',technician TEXT DEFAULT '',created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS invoices(id INTEGER PRIMARY KEY AUTOINCREMENT,job_id INTEGER,customer TEXT,work TEXT,amount REAL,created_at TEXT DEFAULT CURRENT_TIMESTAMP);`);
+let u=db.prepare("SELECT * FROM users WHERE username=?").get(ADMIN_USER);
+if(!u) db.prepare("INSERT INTO users(username,password_hash) VALUES(?,?)").run(ADMIN_USER,bcrypt.hashSync(ADMIN_PASSWORD,10));
+app.use(cors()); app.use(express.json()); app.use(express.static("public"));
+function auth(req,res,next){try{const h=req.headers.authorization||"";req.user=jwt.verify(h.replace("Bearer ",""),SECRET);next()}catch(e){res.status(401).json({error:"Unauthorized"})}}
+app.post("/api/login",(req,res)=>{const {username,password}=req.body||{};const u=db.prepare("SELECT * FROM users WHERE username=?").get(username);if(!u||!bcrypt.compareSync(password,u.password_hash))return res.status(401).json({error:"Invalid login"});res.json({token:jwt.sign({id:u.id,username:u.username},SECRET,{expiresIn:"12h"})})});
+app.post("/api/jobs",(req,res)=>{const {name,mobile,service,address,date}=req.body||{};if(!name||!mobile||!service||!address)return res.status(400).json({error:"Missing fields"});const r=db.prepare("INSERT INTO jobs(name,mobile,service,address,date) VALUES(?,?,?,?,?)").run(name,mobile,service,address,date||"");res.json(db.prepare("SELECT * FROM jobs WHERE id=?").get(r.lastInsertRowid))});
+app.get("/api/jobs",auth,(req,res)=>res.json(db.prepare("SELECT * FROM jobs ORDER BY id DESC").all()));
+app.patch("/api/jobs/:id",auth,(req,res)=>{const {status,technician}=req.body||{};db.prepare("UPDATE jobs SET status=COALESCE(?,status),technician=COALESCE(?,technician) WHERE id=?").run(status,technician,req.params.id);res.json(db.prepare("SELECT * FROM jobs WHERE id=?").get(req.params.id))});
+app.post("/api/invoices",auth,(req,res)=>{const {job_id,customer,work,amount}=req.body||{};const r=db.prepare("INSERT INTO invoices(job_id,customer,work,amount) VALUES(?,?,?,?)").run(job_id||null,customer,work,Number(amount)||0);res.json(db.prepare("SELECT * FROM invoices WHERE id=?").get(r.lastInsertRowid))});
+app.get("/api/stats",auth,(req,res)=>res.json({total:db.prepare("SELECT count(*) c FROM jobs").get().c,completed:db.prepare("SELECT count(*) c FROM jobs WHERE status='Completed'").get().c,pending:db.prepare("SELECT count(*) c FROM jobs WHERE status!='Completed'").get().c}));
+app.get("/api/config",(req,res)=>res.json({phone:process.env.BUSINESS_PHONE||"917887550543",reviewUrl:process.env.GOOGLE_REVIEW_URL||"https://maps.app.goo.gl/1juSAkt2TQud6tkD9?g_st=ac"}));
+app.listen(PORT,()=>console.log("Official AC Wala app running on http://localhost:"+PORT));
